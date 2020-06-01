@@ -24,7 +24,7 @@ parser.add_argument('--valFileList', default='/datasets/cse152-252-sp20-public/h
 parser.add_argument('--experiment', default='checkpoint', help='the path to store sampled images and models')
 parser.add_argument('--imHeight', type=int, default=300, help='height of input image')
 parser.add_argument('--imWidth', type=int, default=300, help='width of input image')
-parser.add_argument('--batchSize', type=int, default=64, help='the size of a batch')
+parser.add_argument('--batchSize', type=int, default=16, help='the size of a batch')
 parser.add_argument('--numClasses', type=int, default=21, help='the number of classes' )
 parser.add_argument('--nepoch', type=int, default=100, help='the training epoch')
 parser.add_argument('--initLR', type=float, default=0.1, help='the initial learning rate')
@@ -116,12 +116,19 @@ trainLossArr = []
 valLossArr = []
 trainAccuracyArr = []
 valAccuracyArr = []
+
+trainLossArrEpoch = []
+valLossArrEpoch = []
+trainAccuracyArrEpoch = []
+valAccuracyArrEpoch = []
+
 train_iteration = 0
 val_iteration = 0
 
 
 def train():
     """Training Code"""
+    global train_iteration
     epoch = opt.nepoch
     confcounts = np.zeros( (opt.numClasses, opt.numClasses), dtype=np.int64 )
     accuracy = np.zeros(opt.numClasses, dtype=np.float32 )
@@ -129,6 +136,10 @@ def train():
     for epoch in range(0, opt.nepoch ):
         encoder.train()
         decoder.train()
+        
+        running_acc = []
+        running_losses = []
+        
         trainingLog = open('{0}/trainingLog_{1}.txt'.format(opt.experiment, epoch), 'w')
         for i, dataBatch in enumerate(segTrainLoader ):
             train_iteration += 1
@@ -164,8 +175,10 @@ def train():
             trainLossArr.append(loss.cpu().data.item() )
             meanLoss = np.mean(np.array(trainLossArr[:] ) )
             trainMeanAccuracy = np.mean(accuracy )
-            
             trainAccuracyArr.append(trainMeanAccuracy)
+            running_losses.append(loss.cpu().data.item() )
+            running_acc.append(accuracy)
+
             
             if train_iteration >= 100:
                 meanLoss = np.mean(np.array(trainLossArr[-100:] ) )
@@ -174,12 +187,20 @@ def train():
                 meanLoss = np.mean(np.array(trainLossArr[:] ) )
                 trainMeanAccuracy = np.mean(np.array(trainAccuracyArr[:] ) )
 
-            print('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, train_iteration, trainLossArr[-1], meanLoss ) )
-            print('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, train_iteration, trainAccuracyArr[-1], trainMeanAccuracy ) )
+            print('Train:- Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, train_iteration, trainLossArr[-1], meanLoss ) )
+            print('Train:- Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, train_iteration, trainAccuracyArr[-1], trainMeanAccuracy ) )
             trainingLog.write('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f \n' % (epoch, train_iteration, trainLossArr[-1], meanLoss ) )
             trainingLog.write('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f\n' % (epoch, train_iteration, trainAccuracyArr[-1], trainMeanAccuracy ) )
 
         trainingLog.close()
+        
+        trainLossArrEpoch.append( np.mean(np.array(running_losses)) )
+        trainAccuracyArrEpoch.append( np.mean(np.array(running_acc)) )
+        
+        #save per epoch readings
+        np.save('%s/train_epoch_loss.npy' % opt.experiment, np.array(trainLossArrEpoch ) )
+        np.save('%s/train_epoch_accuracy.npy' % opt.experiment, np.array(trainAccuracyArrEpoch ) )
+        
         
         if (epoch+1) % 2 == 0:
             np.save('%s/train_loss.npy' % opt.experiment, np.array(trainLossArr ) )
@@ -191,9 +212,13 @@ def train():
 
 def val(epoch):
     """Validation Code"""
+    global val_iteration
     encoder.eval()
     decoder.eval()
 
+    running_acc = []
+    running_losses = []
+    
     confcounts = np.zeros( (opt.numClasses, opt.numClasses), dtype=np.int64 )
     accuracy = np.zeros(opt.numClasses, dtype=np.float32 )
 
@@ -225,8 +250,9 @@ def val(epoch):
         valLossArr.append(loss.cpu().data.item() )
         meanLoss = np.mean(np.array(valLossArr[:] ) )
         valMeanAccuracy = np.mean(accuracy )
-        
         valAccuracyArr.append(valMeanAccuracy)
+        running_losses.append(loss.cpu().data.item() )
+        running_acc.append(accuracy)
         
         if val_iteration >= 100:
             meanLoss = np.mean(np.array(valLossArr[-100:] ) )
@@ -235,17 +261,25 @@ def val(epoch):
             meanLoss = np.mean(np.array(valLossArr[:] ) )
             valMeanAccuracy = np.mean(np.array(valAccuracyArr[:] ) )
 
-        print('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, val_iteration, valLossArr[-1], meanLoss ) )
-        print('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, val_iteration, valAccuracyArr[-1], valMeanAccuracy ) )
+        print('Val:- Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, val_iteration, valLossArr[-1], meanLoss ) )
+        print('Val:- Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, val_iteration, valAccuracyArr[-1], valMeanAccuracy ) )
         validLog.write('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f \n' % (epoch, val_iteration, valLossArr[-1], meanLoss ) )
         validLog.write('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f\n' % (epoch, val_iteration, valAccuracyArr[-1], valMeanAccuracy ) )
 
     validLog.close()
+    
+    valLossArrEpoch.append( np.mean(np.array(running_losses)) )
+    valAccuracyArrEpoch.append( np.mean(np.array(running_acc)) )
+    
+    #save per epoch readings
+    np.save('%s/val_epoch_loss.npy' % opt.experiment, np.array(valLossArrEpoch ) )
+    np.save('%s/val_epoch_accuracy.npy' % opt.experiment, np.array(valAccuracyArrEpoch ) )
     
     if (epoch+1) % 2 == 0:
         np.save('%s/val_loss.npy' % opt.experiment, np.array(valLossArr ) )
         np.save('%s/val_accuracy.npy' % opt.experiment, np.array(valAccuracyArr ) )
         torch.save(encoder.state_dict(), '%s/encoder_%d.pth' % (opt.experiment, epoch+1) )
         torch.save(decoder.state_dict(), '%s/decoder_%d.pth' % (opt.experiment, epoch+1) )
-    
-    return 
+        
+        
+train()
