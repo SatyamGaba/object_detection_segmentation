@@ -52,7 +52,7 @@ class BatchLoader(Dataset ):
 
         im = self.loadImage(imName )
         label, labelIndex, mask = self.loadLabel(labelName )
-
+        
         # If image size is given, randomly crop the images
         if not (self.imHeight is None or self.imWidth is None):
             nrows, ncols = im.shape[1], im.shape[2]

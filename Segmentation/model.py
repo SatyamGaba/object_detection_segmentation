@@ -88,24 +88,24 @@ class decoder(nn.Module ):
     def forward(self, im, x1, x2, x3, x4, x5):
 
         _, _, nh, nw = x3.size()
-        x5 = F.interpolate(x5, [nh, nw], mode='bilinear' )
-        x4 = F.interpolate(x4, [nh, nw], mode='bilinear' )
+        x5 = F.interpolate(x5, [nh, nw], mode='bilinear', align_corners=True)
+        x4 = F.interpolate(x4, [nh, nw], mode='bilinear', align_corners=True)
         y1 = F.relu(self.bn1(self.conv1(torch.cat( [x3, x4, x5], dim=1) ) ), inplace=True )
         y1 = F.relu(self.bn1_1(self.conv1_1(y1 ) ), inplace = True )
 
         _, _, nh, nw = x2.size()
-        y1 = F.interpolate(y1, [nh, nw], mode='bilinear')
+        y1 = F.interpolate(y1, [nh, nw], mode='bilinear', align_corners=True)
         y1 = torch.cat([y1, x2], dim=1)
         y2 = F.relu(self.bn2(self.conv2(y1) ), inplace=True )
 
         _, _, nh, nw = x1.size()
-        y2 = F.interpolate(y2, [nh, nw], mode='bilinear' )
+        y2 = F.interpolate(y2, [nh, nw], mode='bilinear', align_corners=True)
         y3 = F.relu(self.bn3(self.conv3(y2) ), inplace=True )
 
         y4 = self.sf(self.conv4(y3 ) )
 
         _, _, nh, nw = im.size()
-        y4 = F.interpolate(y4, [nh, nw], mode='bilinear')
+        y4 = F.interpolate(y4, [nh, nw], mode='bilinear', align_corners=True)
 
         pred = -torch.log(torch.clamp(y4, min=1e-8) )
 
