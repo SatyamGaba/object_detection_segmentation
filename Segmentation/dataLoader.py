@@ -3,16 +3,18 @@ import numpy as np
 import os.path as osp
 import random
 from torch.utils.data import Dataset
+import torchvision.transforms as transforms
 from PIL import Image
 import cv2
 
 class BatchLoader(Dataset ):
-    def __init__(self, imageRoot, labelRoot, fileList, imWidth = None, imHeight = None, numClasses=21):
+    def __init__(self, imageRoot, labelRoot, fileList, imWidth = None, imHeight = None, numClasses=21, transforms = None):
         super(BatchLoader, self).__init__()
 
         self.imageRoot = imageRoot
         self.labelRoot = labelRoot
         self.fileList = fileList
+        self.transforms = transforms
 
         with open(fileList, 'r') as fIn:
             imgNames = fIn.readlines()
@@ -45,6 +47,10 @@ class BatchLoader(Dataset ):
     def __len__(self):
         return self.count
 
+    def _set_seed(self, seed):
+        random.seed(seed)
+        torch.manual_seed(seed)
+
     def __getitem__(self, ind ):
 
         imName = self.imgNames[self.perm[ind] ]
@@ -52,6 +58,18 @@ class BatchLoader(Dataset ):
 
         im = self.loadImage(imName )
         label, labelIndex, mask = self.loadLabel(labelName )
+        
+        # augmentation
+        if self.transforms:
+            seed = random.randint(0, 2**32)
+            self._set_seed(seed)
+            im = self.transforms(im)
+            self._set_seed(seed)
+            label = self.transforms(label)
+            self._set_seed(seed)
+            labelIndex = self.transforms(labelIndex)
+            self._set_seed(seed)
+            mask = self.transforms(mask)
         
         # If image size is given, randomly crop the images
         if not (self.imHeight is None or self.imWidth is None):

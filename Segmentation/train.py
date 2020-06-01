@@ -3,6 +3,7 @@ from torch.autograd import Variable
 import torch.functional as F
 import dataLoader
 import argparse
+import torchvision.transforms as transforms
 import torchvision.utils as vutils
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -82,6 +83,15 @@ decoder = decoder.to(device)
 params = list(encoder.parameters()) + list(decoder.parameters())
 optimizer = optim.SGD(params, lr=opt.initLR, momentum=0.9, weight_decay=5e-4 )
 
+#augment the dataset with transformations
+transformations = [
+    transforms.RandomCrop(320),
+    transforms.RandomRotation((0,90)),
+    transforms.RandomHorizontalFlip(0.5),
+    transforms.RandomVerticalFlip(0.5)
+]
+tfs = transforms.Compose(transformations)
+
 # Initialize dataLoader
 segTrainDataset = dataLoader.BatchLoader(
         imageRoot = opt.imageRoot,
@@ -89,6 +99,7 @@ segTrainDataset = dataLoader.BatchLoader(
         fileList = opt.trainFileList,
         imWidth = opt.imWidth,
         imHeight = opt.imHeight,
+        # transforms = tfs
         )
 segValDataset = dataLoader.BatchLoader(
         imageRoot = opt.imageRoot,
@@ -96,31 +107,105 @@ segValDataset = dataLoader.BatchLoader(
         fileList = opt.valFileList,
         imWidth = opt.imWidth,
         imHeight = opt.imHeight,
+        # transforms = tfs
         )
 segTrainLoader = DataLoader(segTrainDataset, batch_size=opt.batchSize, num_workers=0, shuffle=True )
 segValLoader = DataLoader(segValDataset, batch_size=opt.batchSize, num_workers=0, shuffle=True )
+   
+trainLossArr = []
+valLossArr = []
+trainAccuracyArr = []
+valAccuracyArr = []
+train_iteration = 0
+val_iteration = 0
 
 
-lossArr = []
-iteration = 0
-accuracyArr = []
-epoch = opt.nepoch
-confcounts = np.zeros( (opt.numClasses, opt.numClasses), dtype=np.int64 )
-accuracy = np.zeros(opt.numClasses, dtype=np.float32 )
+def train():
+    """Training Code"""
+    epoch = opt.nepoch
+    confcounts = np.zeros( (opt.numClasses, opt.numClasses), dtype=np.int64 )
+    accuracy = np.zeros(opt.numClasses, dtype=np.float32 )
 
-for epoch in range(0, opt.nepoch ):
-    trainingLog = open('{0}/trainingLog_{1}.txt'.format(opt.experiment, epoch), 'w')
-    for i, dataBatch in enumerate(segLoader ):
-        iteration += 1
+    for epoch in range(0, opt.nepoch ):
+        encoder.train()
+        decoder.train()
+        trainingLog = open('{0}/trainingLog_{1}.txt'.format(opt.experiment, epoch), 'w')
+        for i, dataBatch in enumerate(segTrainLoader ):
+            train_iteration += 1
+
+            # Read data
+            imBatch = Variable(dataBatch['im']).to(device)
+            labelBatch = Variable(dataBatch['label']).to(device)
+            labelIndexBatch = Variable(dataBatch['labelIndex']).to(device)
+            maskBatch = Variable(dataBatch['mask']).to(device)
+
+            # Train network
+            optimizer.zero_grad()
+
+            x1, x2, x3, x4, x5 = encoder(imBatch )
+            pred = decoder(imBatch, x1, x2, x3, x4, x5 )
+            
+            # cross-entropy loss
+            loss = torch.mean( pred * labelBatch )
+            hist = utils.computeAccuracy(pred, labelIndexBatch, maskBatch )
+            confcounts += hist
+
+            for n in range(0, opt.numClasses ):
+                rowSum = np.sum(confcounts[n, :] )
+                colSum = np.sum(confcounts[:, n] )
+                interSum = confcounts[n, n]
+                accuracy[n] = float(100.0 * interSum) / max(float(rowSum + colSum - interSum ), 1e-5)
+            
+            loss.backward()
+
+            optimizer.step()
+
+            # Output the log information
+            trainLossArr.append(loss.cpu().data.item() )
+            meanLoss = np.mean(np.array(trainLossArr[:] ) )
+            trainMeanAccuracy = np.mean(accuracy )
+            
+            trainAccuracyArr.append(trainMeanAccuracy)
+            
+            if train_iteration >= 100:
+                meanLoss = np.mean(np.array(trainLossArr[-100:] ) )
+                trainMeanAccuracy = np.mean(np.array(trainAccuracyArr[-100:] ) )
+            else:
+                meanLoss = np.mean(np.array(trainLossArr[:] ) )
+                trainMeanAccuracy = np.mean(np.array(trainAccuracyArr[:] ) )
+
+            print('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, train_iteration, trainLossArr[-1], meanLoss ) )
+            print('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, train_iteration, trainAccuracyArr[-1], trainMeanAccuracy ) )
+            trainingLog.write('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f \n' % (epoch, train_iteration, trainLossArr[-1], meanLoss ) )
+            trainingLog.write('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f\n' % (epoch, train_iteration, trainAccuracyArr[-1], trainMeanAccuracy ) )
+
+        trainingLog.close()
+        
+        if (epoch+1) % 2 == 0:
+            np.save('%s/train_loss.npy' % opt.experiment, np.array(trainLossArr ) )
+            np.save('%s/train_accuracy.npy' % opt.experiment, np.array(trainAccuracyArr ) )
+            torch.save(encoder.state_dict(), '%s/encoder_%d.pth' % (opt.experiment, epoch+1) )
+            torch.save(decoder.state_dict(), '%s/decoder_%d.pth' % (opt.experiment, epoch+1) )
+
+        val(epoch)
+
+def val(epoch):
+    """Validation Code"""
+    encoder.eval()
+    decoder.eval()
+
+    confcounts = np.zeros( (opt.numClasses, opt.numClasses), dtype=np.int64 )
+    accuracy = np.zeros(opt.numClasses, dtype=np.float32 )
+
+    validLog = open('{0}/valLog_{1}.txt'.format(opt.experiment, epoch), 'w')
+    for i, dataBatch in enumerate(segValLoader ):
+        val_iteration += 1
 
         # Read data
         imBatch = Variable(dataBatch['im']).to(device)
         labelBatch = Variable(dataBatch['label']).to(device)
         labelIndexBatch = Variable(dataBatch['labelIndex']).to(device)
         maskBatch = Variable(dataBatch['mask']).to(device)
-
-        # Train network
-        optimizer.zero_grad()
 
         x1, x2, x3, x4, x5 = encoder(imBatch )
         pred = decoder(imBatch, x1, x2, x3, x4, x5 )
@@ -135,34 +220,32 @@ for epoch in range(0, opt.nepoch ):
             colSum = np.sum(confcounts[:, n] )
             interSum = confcounts[n, n]
             accuracy[n] = float(100.0 * interSum) / max(float(rowSum + colSum - interSum ), 1e-5)
-        
-        loss.backward()
-
-        optimizer.step()
 
         # Output the log information
-        lossArr.append(loss.cpu().data.item() )
-        meanLoss = np.mean(np.array(lossArr[:] ) )
-        meanAccuracy = np.mean(accuracy )
+        valLossArr.append(loss.cpu().data.item() )
+        meanLoss = np.mean(np.array(valLossArr[:] ) )
+        valMeanAccuracy = np.mean(accuracy )
         
-        accuracyArr.append(meanAccuracy)
+        valAccuracyArr.append(valMeanAccuracy)
         
-        if iteration >= 100:
-            meanLoss = np.mean(np.array(lossArr[-100:] ) )
-            meanAccuracy = np.mean(np.array(accuracyArr[-100:] ) )
+        if val_iteration >= 100:
+            meanLoss = np.mean(np.array(valLossArr[-100:] ) )
+            valMeanAccuracy = np.mean(np.array(valAccuracyArr[-100:] ) )
         else:
-            meanLoss = np.mean(np.array(lossArr[:] ) )
-            meanAccuracy = np.mean(np.array(accuracyArr[:] ) )
+            meanLoss = np.mean(np.array(valLossArr[:] ) )
+            valMeanAccuracy = np.mean(np.array(valAccuracyArr[:] ) )
 
-        print('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, iteration, lossArr[-1], meanLoss ) )
-        print('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, iteration, accuracyArr[-1], meanAccuracy ) )
-        trainingLog.write('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f \n' % (epoch, iteration, lossArr[-1], meanLoss ) )
-        trainingLog.write('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f\n' % (epoch, iteration, accuracyArr[-1], meanAccuracy ) )
+        print('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f' % (epoch, val_iteration, valLossArr[-1], meanLoss ) )
+        print('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f' % (epoch, val_iteration, valAccuracyArr[-1], valMeanAccuracy ) )
+        validLog.write('Epoch %d iteration %d: Loss %.5f Accumulated Loss %.5f \n' % (epoch, val_iteration, valLossArr[-1], meanLoss ) )
+        validLog.write('Epoch %d iteration %d: Accura %.5f Accumulated Accura %.5f\n' % (epoch, val_iteration, valAccuracyArr[-1], valMeanAccuracy ) )
 
-    trainingLog.close()
+    validLog.close()
     
     if (epoch+1) % 2 == 0:
-        np.save('%s/loss.npy' % opt.experiment, np.array(lossArr ) )
-        np.save('%s/accuracy.npy' % opt.experiment, np.array(accuracyArr ) )
+        np.save('%s/val_loss.npy' % opt.experiment, np.array(valLossArr ) )
+        np.save('%s/val_accuracy.npy' % opt.experiment, np.array(valAccuracyArr ) )
         torch.save(encoder.state_dict(), '%s/encoder_%d.pth' % (opt.experiment, epoch+1) )
-        torch.save(decoder.state_dict(), '%s/decoder_%d.pth' % (opt.experiment, epoch+1) )        
+        torch.save(decoder.state_dict(), '%s/decoder_%d.pth' % (opt.experiment, epoch+1) )
+    
+    return 
